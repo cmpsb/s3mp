@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include <limits.h>
 
 #include "s3m.h"
 
@@ -33,11 +34,20 @@ static s3m_vinstrument_t *create_vinstr(uint8_t *u8, s3m_instrument_t *on_disk) 
     vinstr->on_disk = on_disk;
     vinstr->sample_length = sample_size;
 
-    uint8_t *rawSample = (uint8_t *) (u8 + MS_TO_OFF(on_disk->memseg));
-    for (uint16_t i = 0; i < sample_size; ++i) {
-        vinstr->sample[i] = (rawSample[i] / 128.f) - 1;
-        assert(vinstr->sample[i] <= 1);
-        assert(vinstr->sample[i] >= -1);
+    if (!(on_disk->flags & 4)) {
+        uint8_t *rawSample = (uint8_t *) (u8 + MS_TO_OFF(on_disk->memseg));
+        for (uint16_t i = 0; i < sample_size; ++i) {
+            vinstr->sample[i] = (rawSample[i] / 128.f) - 1;
+            assert(vinstr->sample[i] <= 1);
+            assert(vinstr->sample[i] >= -1);
+        }
+    } else {
+        uint16_t *rawSample = (uint16_t *) (u8 + MS_TO_OFF(on_disk->memseg));
+        for (uint16_t i = 0; i < sample_size; ++i) {
+            vinstr->sample[i] = (rawSample[i] / 65536.f) - 0.5;
+            assert(vinstr->sample[i] <= 1);
+            assert(vinstr->sample[i] >= -1);
+        }
     }
 
     memcpy(vinstr->title, title, S3M_TITLE_LENGTH + 1);
@@ -49,13 +59,15 @@ static s3m_cell_t *read_pattern(s3m_t *s3m, uint8_t *u8) {
     s3m_cell_t *cells = calloc(S3M_NUM_ROWS_PER_PATTERN * S3M_NUM_CHANNELS, sizeof(s3m_cell_t));
     assert(cells);
 
+    uint16_t length = *((uint16_t *) u8);
+
     u8 += 2;
 
     uint8_t previous_note[S3M_NUM_CHANNELS] = {0};
     uint8_t previous_instrument[S3M_NUM_CHANNELS] = {0};
     uint8_t previous_volume[S3M_NUM_CHANNELS] = {0};
 
-    for (int row = 0; row < S3M_NUM_ROWS_PER_PATTERN;) {
+    for (int row = 0; row < S3M_NUM_ROWS_PER_PATTERN && u8 < u8 + length;) {
         s3m_cell_t cell = {0};
         cell.raw = *u8;
         ++u8;
@@ -69,6 +81,7 @@ static s3m_cell_t *read_pattern(s3m_t *s3m, uint8_t *u8) {
 
         if (cell.raw & 32) {
             cell.note = *u8;
+            if (cell.note == 255) cell.note = 0;
             if (cell.note) {
                 previous_note[channel] = cell.note;
             }
@@ -82,16 +95,18 @@ static s3m_cell_t *read_pattern(s3m_t *s3m, uint8_t *u8) {
             u8 += 2;
         }
 
-        if (!(cell.raw & 32) || !cell.note) {
+        if ((cell.raw ^ 64) && ((cell.raw ^ 32) || !cell.note)) {
             cell.note = previous_note[channel];
         }
 
-        if (!(cell.raw & 32) || !cell.instrument) {
+        if ((cell.raw ^ 64) && ((cell.raw ^ 32) || !cell.instrument)) {
             cell.instrument = previous_instrument[channel];
         }
 
         if (cell.raw & 64) {
-            cell.volume = *u8;
+            cell.volume = *u8; 
+            if (cell.volume > 64) cell.volume = 0;
+
             if (cell.volume) {
                 previous_volume[channel] = cell.volume;
             }
@@ -106,6 +121,9 @@ static s3m_cell_t *read_pattern(s3m_t *s3m, uint8_t *u8) {
         }
 
         if (cell.raw & 128) {
+            cell.effect = u8[0];
+            cell.effect_info = u8[1];
+
             u8 += 2;
         }
 
@@ -128,8 +146,13 @@ s3m_error_t s3m_open(void *buf, off_t buf_size, s3m_t *s3m) {
         return S3M_E_BAD_HEADER_MAGIC;
     }
 
+    s3m->tempo = s3m->hdr->initial_tempo;
+    s3m->speed = s3m->hdr->initial_speed;
+
     uint8_t *u8 = buf;
     uint16_t *u16 = buf;
+
+    s3m->orders = u8 + sizeof(s3m_header_t);
 
     s3m->instruments = malloc(s3m->hdr->num_instruments * sizeof(s3m_vinstrument_t *));
     assert(s3m->instruments);
@@ -147,6 +170,11 @@ s3m_error_t s3m_open(void *buf, off_t buf_size, s3m_t *s3m) {
     for (uint16_t i = 0; i < s3m->hdr->num_patterns; ++i) {
         uint16_t pp = u16[S3M_PAPP_OFFSET(s3m) / 2 + i] * 16;
 
+        if (!pp) {
+            s3m->patterns[i] = NULL;
+            continue;
+        }
+
         s3m_cell_t *cells = read_pattern(s3m, u8 + pp);
         s3m->patterns[i] = cells;
     }
@@ -155,6 +183,18 @@ s3m_error_t s3m_open(void *buf, off_t buf_size, s3m_t *s3m) {
 }
 
 static const char *note_names[] = {
+    "C-",
+    "C#",
+    "D-",
+    "D#",
+    "E-",
+    "F-",
+    "F#",
+    "G-",
+    "G#",
+    "A-",
+    "A#",
+    "B-",
     "C-",
     "C#",
     "D-",
@@ -185,24 +225,40 @@ static int note_periods[] = {
 };
 
 void s3m_note_to_text(uint8_t note, char *buf, size_t len) {
-    snprintf(buf, len, "%-2s%d", note_names[note & 0xF], (note >> 4) + 1);
+    if ((note >> 4) == 0xF) {
+        strlcpy(buf, "^^ ", len);
+    } else {
+        snprintf(buf, len, "%-2s%d", note_names[note & 0xF], (note >> 4) + 1);
+    }
 }
 
-int s3m_cell_to_text(s3m_cell_t *cell, char *buf, size_t len) {
+void s3m_effect_to_text(uint8_t effect, uint8_t data, char *buf, size_t len) {
+    if (!effect) {
+        strlcpy(buf, "---", len);
+        return;
+    }
+
+    snprintf(buf, len, "%c%02hhX", 'A' + effect - 1, data);
+}
+
+void s3m_cell_to_text(s3m_cell_t *cell, char *buf, size_t len) {
+    assert(cell);
+
     size_t note_buf_len = 5;
     char note_buf[note_buf_len];
-    s3m_note_to_text(cell->note, note_buf, len);
+    s3m_note_to_text(cell->note, note_buf, note_buf_len);
 
-    if (cell->raw && len < 128) {
-        return snprintf(buf, len, "%s %02hhuv%02hhu", note_buf, cell->instrument, cell->volume);
-    } else if (cell->raw) {
-        return snprintf(buf, len, "\033[34;1m%s \033[36;1m%02hhu\033[32;1mv%02hhu\033[0m",
-            note_buf, cell->instrument, cell->volume
+    size_t effect_buf_len = 4;
+    char effect_buf[effect_buf_len];
+    s3m_effect_to_text(cell->effect, cell->effect_info, effect_buf, effect_buf_len);
+
+    if (cell->raw) {
+        snprintf(buf, len, 
+            "\033[34;1m%s \033[36;1m%02hhu\033[32;1mv%02hhu \033[33m%s\033[0m",
+            note_buf, cell->instrument, cell->volume, effect_buf
         );
     } else {
-        strlcpy(buf, "--- -- --", len);
-
-        return len - 1;
+        strlcpy(buf, "\033[34;1m--- \033[36;1m--\033[32;1m -- \033[33m---\033[0m", len);
     }
 }
 

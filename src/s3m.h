@@ -20,6 +20,8 @@
 #define S3M_INPP_OFFSET(s3m_) (sizeof(s3m_header_t) + (s3m_)->hdr->num_orders)
 #define S3M_PAPP_OFFSET(s3m_) (S3M_INPP_OFFSET(s3m_) + (s3m_)->hdr->num_instruments * 2)
 
+#define S3M_IS_EFFECT(val_, eff_) ((val_) == (eff_) - 'A' + 1)
+
 typedef struct s3m_header {
     char title[S3M_TITLE_LENGTH];
 
@@ -84,6 +86,8 @@ typedef struct s3m_cell {
     uint8_t instrument;
     uint8_t note;
     uint8_t volume;
+    uint8_t effect;
+    uint8_t effect_info;
 } s3m_cell_t;
 
 typedef struct s3m_vinstrument {
@@ -100,6 +104,10 @@ typedef struct s3m {
 
     s3m_vinstrument_t **instruments;
     s3m_cell_t **patterns;
+    uint8_t *orders;
+
+    double tempo;
+    double speed;
 } s3m_t;
 
 typedef enum s3m_error {
@@ -111,7 +119,7 @@ typedef enum s3m_error {
 typedef uint16_t s3m_parapointer_t;
 typedef uint8_t s3m_order_t;
 
-static void s3m_assert_static_invariants(void) {
+static inline void s3m_assert_static_invariants(void) {
     assert(sizeof(s3m_header_t) == 96);
     assert(sizeof(s3m_instrument_t) == 80);
 }
@@ -121,10 +129,14 @@ void s3m_play_sample(int channel, s3m_t *s3m, uint8_t instr, uint8_t note, uint8
 
 s3m_error_t s3m_open(void *buf, off_t buf_size, s3m_t *s3m);
 
-int s3m_cell_to_text(s3m_cell_t *cell, char *buf, size_t len);
+void s3m_cell_to_text(s3m_cell_t *cell, char *buf, size_t len);
 
-static s3m_cell_t *s3m_get_cell(s3m_cell_t *pattern, int channel, int row) {
+static inline s3m_cell_t *s3m_get_cell(s3m_cell_t *pattern, int channel, int row) {
     return pattern + row * S3M_NUM_CHANNELS + channel;
 }
 
 double s3m_get_note_freq(s3m_vinstrument_t *vinstr, uint8_t note);
+
+static inline long s3m_tempo_to_ns(s3m_t *s3m) {
+    return (long) (1e9 / (4.0 * s3m->tempo * (6.0 / s3m->speed) / 60.0));
+}

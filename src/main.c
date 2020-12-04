@@ -143,7 +143,8 @@ int main(int argc, char **argv) {
     }
 
     s3m_t s3m;
-    assert(s3m_open(file, file_info.st_size, &s3m) == 0);
+    status = s3m_open(file, &s3m);
+    assert(status == 0);
 
     // Disable line wrapping
     if (!wrap) {
@@ -151,17 +152,17 @@ int main(int argc, char **argv) {
     }
 
     printf("Filling note cache...\n");
-    Mix_Volume(-1, 0);
+    Mix_Volume(-1, 128);
     char bar[41];
     bar[40] = 0;
     for (uint16_t i = 0; i < s3m.hdr->num_patterns; ++i) {
         double progress = ((double) i) / s3m.hdr->num_patterns;
         int iprogress = (int) ceil(progress * 40);
-        
+
         memset(bar, '#', iprogress);
         memset(bar + iprogress, ' ', 40 - iprogress);
 
-        printf("\033[1K\033[1G%3d%% [\033[38;5;%dm%s\033[0m]", 
+        printf("\033[1K\033[1G%3d%% [\033[38;5;%dm%s\033[0m]",
             (int) ceil(progress * 100), BAR_COLORS[(int) ceil(progress * 10)], bar
         );
         fflush(stdout);
@@ -181,7 +182,7 @@ int main(int argc, char **argv) {
     Mix_HaltChannel(-1);
     Mix_Volume(-1, 128);
     for (;;) {
-        for (uint16_t i = 0; i < s3m.hdr->num_orders && s3m.orders[i] != 255; ++i) {            
+        for (uint16_t i = 0; i < s3m.hdr->num_orders && s3m.orders[i] != 255; ++i) {
             play_pattern(&s3m, s3m.orders[i], &tv, 0);
         }
     }

@@ -133,7 +133,7 @@ static s3m_cell_t *read_pattern(s3m_t *s3m, uint8_t *u8) {
     return cells;
 }
 
-s3m_error_t s3m_open(void *buf, off_t buf_size, s3m_t *s3m) {
+s3m_error_t s3m_open(void *buf, s3m_t *s3m) {
     s3m_assert_static_invariants();
 
     assert(buf);

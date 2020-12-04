@@ -3,7 +3,7 @@
 #include <errno.h>
 #include <limits.h>
 
-#include <SDL.h>
+#include <SDL2/SDL.h>
 #include <SDL_mixer.h>
 #include <samplerate.h>
 
@@ -93,6 +93,6 @@ void s3m_play_sample(int channel, s3m_t *s3m, uint8_t instr, uint8_t bnote, uint
 
     channels[channel].abuf = (uint8_t *) resample_cache[instr][bnote];
     channels[channel].alen = consv_output_length * sizeof(int16_t);
-    channels[channel].volume = (uint8_t) volume * 1.5;
+    channels[channel].volume = (uint8_t) volume * 2;
     Mix_PlayChannel(channel, channels + channel, 0);
 }
